@@ -1953,15 +1953,16 @@ function drawMini(k, hi) {
   // 軸線與刻度
   c.strokeStyle = "#dde3ec"; c.beginPath(); c.moveTo(0, h - 14); c.lineTo(w, h - 14); c.stroke();
   c.font = "9.5px sans-serif"; c.textBaseline = "bottom";
-  const wide = w >= 380;
+  const wide = w >= 380, narrow = w < 190;   // narrow＝手機兩欄窄卡，刻度減量避免重疊
   const tks = [];
   if (d.def.type === "ext") {
-    for (let k2 = 0; k2 <= 4; k2++) tks.push(t0 + k2 * (t1 - t0) / 4);
+    const nSegE = narrow ? 2 : 4;
+    for (let k2 = 0; k2 <= nSegE; k2++) tks.push(t0 + k2 * (t1 - t0) / nSegE);
   } else if (d.def.type === "us" || d.def.us) {
-    const span = t1 - t0, nSeg = span > 8 * 3600 ? 5 : 4;   // 含盤前盤後(較長)→多一格
+    const span = t1 - t0, nSeg = narrow ? 2 : (span > 8 * 3600 ? 5 : 4);   // 含盤前盤後(較長)→多一格
     for (let k2 = 0; k2 <= nSeg; k2++) tks.push(t0 + k2 * span / nSeg);
   } else if (d.def.win === "fx") {
-    for (const k2 of (wide ? [0, 1, 2, 3, 4, 5, 6, 7] : [0, 2, 4, 6])) tks.push(t0 + k2 * 3600);
+    for (const k2 of (wide ? [0, 1, 2, 3, 4, 5, 6, 7] : (narrow ? [0, 3, 6] : [0, 2, 4, 6]))) tks.push(t0 + k2 * 3600);
   } else {
     // 08:45起：刻度取整點 09:00–13:00
     for (const k2 of (wide ? [0, 1, 2, 3, 4] : [0, 2, 4])) tks.push(t0 + 900 + k2 * 3600);
