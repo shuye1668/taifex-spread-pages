@@ -1203,7 +1203,7 @@ function drawHist() {
           const x = xOfCoord(base + hours[hi]);
           if (x < M.l || x > W - M.r) continue;
           let lbl = String(9 + hi).padStart(2, "0") + ":00";
-          if (firstTick) { lbl = dlbl + " " + lbl; firstTick = false; }
+          if (firstTick) { if (W - M.l - M.r >= 340) lbl = dlbl + " " + lbl; firstTick = false; }   // 窄圖省略日期前綴避免與下一刻度重疊
           ctx.textAlign = x < M.l + 26 ? "left" : (x > W - M.r - 26 ? "right" : "center");   // 邊緣標籤不切字
           ctx.fillText(lbl, x, H - M.b + 6);
           ctx.strokeStyle = "#f0f3f8";
