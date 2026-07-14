@@ -297,11 +297,19 @@ html { -webkit-text-size-adjust: 100%; }
   #hcv { height: 300px; }
   /* 盤中子圖：極窄螢幕改單欄 */
   .card { padding: 10px 10px; }
+  /* 盤中子圖：標題單行省略不再多行換行、數值獨立一行、圖形收斂為 16:9 左右 */
+  .mini { padding: 6px 9px 3px; }
+  .mini .mt { flex-direction: column; align-items: stretch; gap: 0; margin-bottom: 2px; }
+  .mini .mt > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: 11px; color: #667; }
+  .mini .mt .mv { font-size: 13.5px; font-weight: 600; }
+  .mini canvas { height: 96px; }
   /* iOS 聚焦自動放大會打亂版面：表單字級固定 16px */
   input[type=number], input[type=text], input[type=password], select, textarea { font-size: 16px; }
 }
 @media (max-width: 360px) {
   .mini { width: 100% !important; }
+  .mini canvas { height: 110px; }
 }
 @media (pointer: coarse) {
   .hint, .ic-hint { display: none; }
