@@ -1,0 +1,144 @@
+name: data-staleness-watch
+
+# 外部「斷線守門」：定時檢查公開 data 分支的 meta.json 發布時間戳。
+# 家中主機發布鏈（台指期價差監控.py -> pages_publish.py）只要停擺——無論是
+# PC 關機、主程式當掉、或 git push 認證（PAT）過期——data 分支就不再更新；
+# 本 workflow 會在資料超過門檻時間未更新時開/更新一張 Issue 通知維護者，
+# 並在資料恢復後自動關閉該 Issue。
+#
+# 設計要點：
+#   * 完全跑在 GitHub 上，不需任何 secret（用內建 GITHUB_TOKEN 開 Issue）。
+#   * 只讀取本 repo 自己的 data 分支，不連任何台灣資料源，故不受海外 IP
+#     地理封鎖影響——即使家中 PC 全關也能示警。
+#   * 健康時發布器 24 小時每 ~55 分鐘至少發布一次（收盤維護），故 120 分鐘
+#     門檻幾乎零誤報。
+#   * 排程 workflow 只在預設分支（main）生效；本檔需合併進 main 後才會啟用。
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # 每 30 分鐘（UTC；只看資料新鮮度，與時區無關）
+  workflow_dispatch: {}       # 允許手動觸發測試
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: data-staleness-watch
+  cancel-in-progress: false
+
+env:
+  # 資料超過這麼多「分鐘」沒更新就視為停擺並告警。
+  STALE_THRESHOLD_MIN: '120'
+  DATA_BRANCH: 'data'
+  DATA_FILE: 'meta.json'
+  ALERT_LABEL: 'data-stale'
+  ASSIGNEE: 'shuye1668'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check data freshness and alert
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const thresholdMin = parseInt(process.env.STALE_THRESHOLD_MIN, 10);
+            const branch = process.env.DATA_BRANCH;
+            const file = process.env.DATA_FILE;
+            const label = process.env.ALERT_LABEL;
+            const assignee = process.env.ASSIGNEE;
+            const { owner, repo } = context.repo;
+
+            // 讀取 data 分支的 meta.json（走 API 權威來源，避開 raw CDN 快取）
+            let meta = null, readErr = null;
+            try {
+              const res = await github.rest.repos.getContent({
+                owner, repo, path: file, ref: branch,
+                headers: { Accept: 'application/vnd.github.raw+json' },
+              });
+              const raw = (typeof res.data === 'string')
+                ? res.data
+                : Buffer.from(res.data.content, res.data.encoding || 'base64').toString('utf8');
+              meta = JSON.parse(raw);
+            } catch (e) {
+              readErr = (e && e.message) ? e.message : String(e);
+            }
+
+            const nowSec = Math.floor(Date.now() / 1000);
+            // 以發布時間 now 為主、dataAsOf 為輔，取較新者判斷新鮮度
+            let stampSec = 0;
+            if (meta) stampSec = Math.max(Number(meta.now) || 0, Number(meta.dataAsOf) || 0);
+            const ageMin = stampSec ? Math.round((nowSec - stampSec) / 60) : null;
+            const isStale = (readErr != null) || (stampSec === 0) || (ageMin > thresholdMin);
+
+            const fmtTW = (sec) => sec
+              ? new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', hour12: false,
+                  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+                  .format(new Date(sec * 1000))
+              : '—';
+            const publishedAt = (meta && meta.publishedAt) ? meta.publishedAt : '—';
+
+            // 找既有的 open 告警 Issue（用自訂 label；排除 PR）
+            const found = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'open', labels: label, per_page: 50,
+            });
+            const openIssue = found.find((i) => !i.pull_request) || null;
+
+            if (isStale) {
+              const reason = readErr
+                ? ('讀取 data/' + file + ' 失敗：' + readErr)
+                : (stampSec === 0
+                    ? ('data/' + file + ' 缺少 now / dataAsOf 時間戳')
+                    : ('資料已停更約 ' + ageMin + ' 分鐘（門檻 ' + thresholdMin + ' 分）'));
+              const body = [
+                '## ⚠️ 台指期價差監控 公開頁資料停更',
+                '',
+                '- **狀態**：' + reason,
+                '- **最後發布時間（台北）**：' + fmtTW(stampSec) + '（publishedAt: ' + publishedAt + '）',
+                '- **偵測時間（台北）**：' + fmtTW(nowSec),
+                '- **公開頁**：https://' + owner + '.github.io/' + repo + '/',
+                '',
+                '### 可能原因（依常見度）',
+                '1. 家中主機 `台指期價差監控.py`（127.0.0.1:8701）沒在跑或當掉',
+                '2. 家中 PC 關機／休眠／斷網',
+                '3. `pages_publish.py` 的 git push 認證（PAT）過期 → 日誌會是 `pushfail:`',
+                '4. 工作排程器 / NSSM 服務被停用',
+                '',
+                '### 復原檢查',
+                '1. 開 `http://127.0.0.1:8701` 確認主程式有回應',
+                '2. 跑 `python pages_publish.py --status` 看日誌最後幾行',
+                '3. 依日誌對症：重啟主程式 / 更新 PAT / 重新啟用排程',
+                '',
+                '> 本 Issue 由 `data-staleness-watch` workflow 自動維護：資料恢復更新後會自動關閉。',
+              ].join('\n');
+
+              if (openIssue) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: openIssue.number,
+                  body: '🔁 仍為停更狀態：' + reason + '（最後發布 ' + fmtTW(stampSec) + '，偵測於 ' + fmtTW(nowSec) + '）',
+                });
+                core.warning('data stale: ' + reason + ' (issue #' + openIssue.number + ')');
+              } else {
+                await github.rest.issues.createLabel({
+                  owner, repo, name: label, color: 'b54708', description: '公開頁資料停更告警',
+                }).catch(() => {});
+                const created = await github.rest.issues.create({
+                  owner, repo,
+                  title: '⚠️ 台指期頁面資料已停更（偵測於 ' + fmtTW(nowSec) + '）',
+                  body, labels: [label], assignees: [assignee],
+                });
+                core.warning('data stale: ' + reason + ' -> opened issue #' + created.data.number);
+              }
+            } else {
+              if (openIssue) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: openIssue.number,
+                  body: '✅ 資料已恢復更新（最後發布 ' + fmtTW(stampSec) + '，落後 ' + ageMin + ' 分，低於門檻 ' + thresholdMin + ' 分）。自動關閉。',
+                });
+                await github.rest.issues.update({
+                  owner, repo, issue_number: openIssue.number, state: 'closed', state_reason: 'completed',
+                });
+              }
+              core.info('data fresh: age ' + ageMin + ' min (<= ' + thresholdMin + ')');
+            }
