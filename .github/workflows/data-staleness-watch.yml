@@ -1,10 +1,10 @@
 name: data-staleness-watch
 
-# 外部「斷線守門」：定時檢查公開 data 分支的 meta.json 發布時間戳。
+# 外部「斷線守門」：定時檢查公開 data 分支的 meta.json 資料時間戳。
 # 家中主機發布鏈（台指期價差監控.py -> pages_publish.py）只要停擺——無論是
-# PC 關機、主程式當掉、或 git push 認證（PAT）過期——data 分支就不再更新；
-# 本 workflow 會在資料超過門檻時間未更新時開/更新一張 Issue 通知維護者，
-# 並在資料恢復後自動關閉該 Issue。
+# PC 關機、主程式當掉、工作排程器被停用，或 git push 認證（PAT）過期——data
+# 分支就不再更新；本 workflow 會在資料超過門檻時間未更新時開/更新一張 Issue
+# 通知維護者，並在資料恢復後自動關閉該 Issue。
 #
 # 設計要點：
 #   * 完全跑在 GitHub 上，不需任何 secret（用內建 GITHUB_TOKEN 開 Issue）。
@@ -66,10 +66,16 @@ jobs:
             }
 
             const nowSec = Math.floor(Date.now() / 1000);
-            // 以發布時間 now 為主、dataAsOf 為輔，取較新者判斷新鮮度
-            let stampSec = 0;
-            if (meta) stampSec = Math.max(Number(meta.now) || 0, Number(meta.dataAsOf) || 0);
+            const dataAsOf = meta ? (Number(meta.dataAsOf) || 0) : 0;
+            const ranAt = meta ? (Number(meta.now) || 0) : 0;
+
+            // 「頁面上的數值新不新」只由 dataAsOf（資料本身的時間）決定。
+            // meta.now 僅代表發布器跑過一輪：若發布器把過期的緩衝重新發布一次
+            // （例如主程式死掉後殘留的舊快照），now 會是新的但 dataAsOf 仍是舊的。
+            // 故絕不可用 max(now, dataAsOf)，否則會把陳舊資料誤判為健康。
+            const stampSec = dataAsOf || ranAt;
             const ageMin = stampSec ? Math.round((nowSec - stampSec) / 60) : null;
+            const ranAgeMin = ranAt ? Math.round((nowSec - ranAt) / 60) : null;
             const isStale = (readErr != null) || (stampSec === 0) || (ageMin > thresholdMin);
 
             const fmtTW = (sec) => sec
@@ -89,16 +95,23 @@ jobs:
               const reason = readErr
                 ? ('讀取 data/' + file + ' 失敗：' + readErr)
                 : (stampSec === 0
-                    ? ('data/' + file + ' 缺少 now / dataAsOf 時間戳')
+                    ? ('data/' + file + ' 缺少 dataAsOf / now 時間戳')
                     : ('資料已停更約 ' + ageMin + ' 分鐘（門檻 ' + thresholdMin + ' 分）'));
+              // 發布器有在跑、但資料是舊的 → 多半是主程式死了、發布器重發舊緩衝
+              const mismatchNote = (dataAsOf && ranAt && (ranAgeMin !== null) && ranAgeMin <= thresholdMin)
+                ? '\n> ⚠️ 發布器最近有跑過（' + fmtTW(ranAt) + '），但資料時間仍停在 '
+                  + fmtTW(dataAsOf) + ' —— 通常代表 `台指期價差監控.py` 沒在跑，'
+                  + '發布器只是把過期緩衝重發。請先確認 http://127.0.0.1:8701 有回應。\n'
+                : '';
               const body = [
                 '## ⚠️ 台指期價差監控 公開頁資料停更',
                 '',
                 '- **狀態**：' + reason,
-                '- **最後發布時間（台北）**：' + fmtTW(stampSec) + '（publishedAt: ' + publishedAt + '）',
+                '- **資料時間 dataAsOf（台北）**：' + fmtTW(dataAsOf),
+                '- **發布器最後跑動 now（台北）**：' + fmtTW(ranAt) + '（publishedAt: ' + publishedAt + '）',
                 '- **偵測時間（台北）**：' + fmtTW(nowSec),
                 '- **公開頁**：https://' + owner + '.github.io/' + repo + '/',
-                '',
+                mismatchNote,
                 '### 可能原因（依常見度）',
                 '1. 家中主機 `台指期價差監控.py`（127.0.0.1:8701）沒在跑或當掉',
                 '2. 家中 PC 關機／休眠／斷網',
@@ -116,7 +129,8 @@ jobs:
               if (openIssue) {
                 await github.rest.issues.createComment({
                   owner, repo, issue_number: openIssue.number,
-                  body: '🔁 仍為停更狀態：' + reason + '（最後發布 ' + fmtTW(stampSec) + '，偵測於 ' + fmtTW(nowSec) + '）',
+                  body: '🔁 仍為停更狀態：' + reason + '（資料時間 ' + fmtTW(dataAsOf)
+                        + '，發布器最後跑動 ' + fmtTW(ranAt) + '，偵測於 ' + fmtTW(nowSec) + '）',
                 });
                 core.warning('data stale: ' + reason + ' (issue #' + openIssue.number + ')');
               } else {
@@ -134,11 +148,12 @@ jobs:
               if (openIssue) {
                 await github.rest.issues.createComment({
                   owner, repo, issue_number: openIssue.number,
-                  body: '✅ 資料已恢復更新（最後發布 ' + fmtTW(stampSec) + '，落後 ' + ageMin + ' 分，低於門檻 ' + thresholdMin + ' 分）。自動關閉。',
+                  body: '✅ 資料已恢復更新（資料時間 ' + fmtTW(dataAsOf) + '，落後 ' + ageMin
+                        + ' 分，低於門檻 ' + thresholdMin + ' 分）。自動關閉。',
                 });
                 await github.rest.issues.update({
                   owner, repo, issue_number: openIssue.number, state: 'closed', state_reason: 'completed',
                 });
               }
-              core.info('data fresh: age ' + ageMin + ' min (<= ' + thresholdMin + ')');
+              core.info('data fresh: dataAsOf age ' + ageMin + ' min (<= ' + thresholdMin + ')');
             }
