@@ -8,3 +8,11 @@
   請勿轉散布本頁資料。原始資料版權屬各資料來源所有。
 
 `index.html` 由私有 repo 的 `pages_publish.py --build-site` 自動產生，請勿手動編輯。
+
+## 可靠度守門（自動偵測資料停更）
+
+`.github/workflows/data-staleness-watch.yml` 每 30 分鐘檢查 `data` 分支的
+`meta.json` 發布時間戳。家中主機發布鏈若停擺（PC 關機、主程式當掉、git push
+認證過期…），資料超過 120 分鐘未更新即自動開一張 Issue 通知維護者，資料恢復
+後自動關閉。完全跑在 GitHub 上、不需任何 secret、不碰任何台灣資料源，PC 全關
+也能示警。合併進 `main` 後生效。
