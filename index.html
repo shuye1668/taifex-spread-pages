@@ -797,11 +797,14 @@ function render(res, raw) {
   badge.textContent = (usedTaifex ? "期交所MIS ＋ SGX" : "鉅亨備援 ＋ SGX（期交所暫不可用）") + "｜" + sess;
   badge.className = "badge " + (usedTaifex ? "live" : "warn");
   const alert = document.getElementById("staleAlert");
-  const ageDays = Math.floor((new Date(tStr) - new Date(cfg.seedDate)) / 86400000);
-  const lastDaily = cfg.daily.length ? cfg.daily[cfg.daily.length - 1][0] : cfg.seedDate;
-  if (tStr > lastDaily || ageDays > 14) {
+  // 2026-10-02：除息點數改由 update_div_config.py 每天用證交所資料自動更新（divUpdated＝更新日）；
+  // seedDate 改成歷史起點（讓歷史圖也算得出當時的未除息點數），所以「過期」改看 divUpdated。
+  const updDate = cfg.divUpdated || cfg.seedDate;
+  const ageDays = Math.floor((new Date(tStr) - new Date(updDate)) / 86400000);
+  const lastDaily = cfg.daily.length ? cfg.daily[cfg.daily.length - 1][0] : updDate;
+  if (tStr > lastDaily || ageDays > (cfg.divUpdated ? 3 : 14)) {
     alert.style.display = "block";
-    alert.textContent = "⚠ 除息資料基準日為 " + cfg.seedDate + "（每日明細至 " + lastDaily + "），已超出涵蓋範圍或超過兩週。還原價差可能失準，請至「除息資料設定」更新最新除息預估數據。";
+    alert.textContent = "⚠ 除息資料最後更新於 " + updDate + "（每日明細至 " + lastDaily + "），已過期。還原價差可能失準 —— 每天 08:20 會自動更新（工作排程器 Spread_DivUpdate）；沒更新請檢查該工作，或至「除息資料設定」手動更新。";
   } else alert.style.display = "none";
 
   const cards = document.getElementById("cards");
